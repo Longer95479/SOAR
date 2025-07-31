@@ -6,7 +6,7 @@
     <h2>Simultaneous Exploration and Photographing with Heterogeneous UAVs for Fast Autonomous Reconstruction</h2>
     <strong>IROS 2024 Oral</strong>
     <br>
-        <a href="https://robotics-star.com/people" target="_blank">Mingjie Zhang</a><sup>1,3,*</sup>,
+        <a href="https://zager-zhang.github.io" target="_blank">Mingjie Zhang</a><sup>1,3,*</sup>,
         <a href="https://chen-albert-feng.github.io/AlbertFeng.github.io" target="_blank">Chen
             Feng</a><sup>2,*</sup>,
         <a href="https://robotics-star.com/people" target="_blank">Zengzhi Li</a><sup>1,4</sup>,
