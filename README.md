@@ -149,7 +149,7 @@ If you want to use the GPU version of MARSIM, you can change the parameter "use_
 You can modify the `pisa.launch` or `sydney.launch` file as follows:
 
 ```xml
-  <!-- _NUM_ is the total number of explorer and photographers -->
+  <!-- TODO: _NUM_ is the total number of explorer and photographers -->
   <arg name="drone_num" value="_NUM_" />
 
   ... ...
@@ -169,7 +169,7 @@ You can modify the `pisa.launch` or `sydney.launch` file as follows:
         
         ... ...
         
-        <!-- Adjust to the appropriate initial position. -->
+        <!-- TODO: Adjust to the appropriate initial position. -->
         <arg name="init_x_" value="" />
         <arg name="init_y_" value="" />
         <arg name="init_z_" value="" />
@@ -193,7 +193,7 @@ You can modify the `pisa.launch` or `sydney.launch` file as follows:
     <group if="$(arg use_sim)">
       <include file="$(find heterogeneous_manager)/launch/single_camera_uav.xml">
         <arg name="drone_id" value="1"/>
-        <!-- Adjust to the appropriate initial position. -->
+        <!-- TODO: Adjust to the appropriate initial position. -->
         <arg name="init_x_" value=""/>
         <arg name="init_y_" value=""/>
         <arg name="init_z_" value=""/>
@@ -209,7 +209,7 @@ You can modify the `pisa.launch` or `sydney.launch` file as follows:
   <!-- PhotographerX (X = _NUM_-1) -->
   <group ns="quad_X">
     <include file="$(find heterogeneous_manager)/launch/single_camera_uav_exploration.xml">
-      <!-- Adjust to the appropriate drone_id = _NUM_-1 -->
+      <!-- TODO: Adjust to the appropriate drone_id = _NUM_-1 -->
       <arg name="drone_id" value="X" />
       
       ... ...
@@ -218,9 +218,9 @@ You can modify the `pisa.launch` or `sydney.launch` file as follows:
 
     <group if="$(arg use_sim)">
       <include file="$(find heterogeneous_manager)/launch/single_camera_uav.xml">
-        <!-- Adjust to the appropriate drone_id = _NUM_-1 -->
+        <!-- TODO: Adjust to the appropriate drone_id = _NUM_-1 -->
         <arg name="drone_id" value="X"/>
-        <!-- Adjust to the appropriate initial position. -->
+        <!-- TODO: Adjust to the appropriate initial position. -->
         <arg name="init_x_" value=""/>
         <arg name="init_y_" value=""/>
         <arg name="init_z_" value=""/>
