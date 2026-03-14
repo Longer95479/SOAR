@@ -1513,7 +1513,7 @@ void HeterogenousPlannerManager::MDMTSP_GA(const MatrixXd& dmat, const MatrixXd&
       vector<double> cost_list;
       VectorXi p_rte = pop_rte.row(p);
       vector<int> p_brk = pop_brk[p];
-      salesmen = p_brk.size() + 1;
+      salesmen = max_salesmen;
       MatrixXi rng = calcRange(p_brk, n);
       for (int sa = 0; sa < salesmen; ++sa) {
         if (rng(sa, 0) <= rng(sa, 1)) {
@@ -1658,21 +1658,23 @@ void HeterogenousPlannerManager::MDMTSP_GA(const MatrixXd& dmat, const MatrixXd&
           case 9: {
             std::random_device rd;
             std::mt19937 gen(rd());
-            std::uniform_int_distribution<int> dis(1, max_salesmen - 1);
+            std::uniform_int_distribution<int> dis(0, static_cast<int>(tmp_pop_brk[k].size()) - 1);
             int l = dis(gen);
             vector<int> temp = tmp_pop_brk[k];
-            temp.erase(temp.begin() + l - 1);
+            temp.erase(temp.begin() + l);
             temp.push_back(n - 1);
+            std::sort(temp.begin(), temp.end());
             tmp_pop_brk[k] = temp;
           } break;
           case 10: {
             std::random_device rd;
             std::mt19937 gen(rd());
-            std::uniform_int_distribution<int> dis(1, max_salesmen - 1);
+            std::uniform_int_distribution<int> dis(0, static_cast<int>(tmp_pop_brk[k].size()) - 1);
             int l = dis(gen);
             vector<int> temp = tmp_pop_brk[k];
-            temp.erase(temp.begin() + l - 1);
-            temp.insert(temp.begin(), 0);
+            temp.erase(temp.begin() + l);
+            temp.push_back(-1);
+            std::sort(temp.begin(), temp.end());
             tmp_pop_brk[k] = temp;
           } break;
           case 11: {
@@ -1817,40 +1819,50 @@ void HeterogenousPlannerManager::getMdmtspInitValue(
     const vector<vector<int>>& last_drone_existing_cluster_ids, const vector<int>& last_cluster_ids,
     const vector<int>& new_cluster_ids, VectorXi& p_rte, vector<int>& p_brk)
 {
-  // get population init value
-
-  p_brk.clear();
-  // Insert new_cluster_ids into last_cluster_ids to get the new init_value.
   vector<int> init_value = randomInsert(last_cluster_ids, new_cluster_ids);
-  vector<int> init_brk;
-  int cur_index = 0;
-  int sub_drone_id = 0;
-  int sub_index = 0;
-  for (auto init_v : init_value) {
-    cur_index++;
-    // ROS_WARN("cur_index = %d init value = %d ", cur_index, init_v);
-    while (sub_drone_id < (int)last_drone_existing_cluster_ids.size() &&
-           last_drone_existing_cluster_ids[sub_drone_id].size() == 0) {
-      sub_drone_id++;
-      init_brk.push_back(cur_index - 1);
+  int drone_num = last_drone_existing_cluster_ids.size();
+  vector<int> route_lengths(drone_num, 0);
+
+  int current_drone = 0;
+  int match_index = 0;
+  auto skipEmptyRoutes = [&]() {
+    while (current_drone < drone_num &&
+           last_drone_existing_cluster_ids[current_drone].empty()) {
+      ++current_drone;
+      match_index = 0;
     }
-    if (sub_drone_id == (int)last_drone_existing_cluster_ids.size())
-      break;
-    if (init_v == last_drone_existing_cluster_ids[sub_drone_id][sub_index]) {
-      sub_index++;
-      if (sub_index == (int)last_drone_existing_cluster_ids[sub_drone_id].size()) {
-        sub_index = 0;
-        sub_drone_id++;
-        if (sub_drone_id == (int)last_drone_existing_cluster_ids.size())
-          break;
-        init_brk.push_back(cur_index - 1);
-        // ROS_WARN("break value = %d", cur_index - 1);
+  };
+  skipEmptyRoutes();
+
+  for (auto init_v : init_value) {
+    int assigned_drone = current_drone;
+    if (assigned_drone >= drone_num)
+      assigned_drone = drone_num - 1;
+    route_lengths[assigned_drone]++;
+
+    if (current_drone >= drone_num ||
+        last_drone_existing_cluster_ids[current_drone].empty())
+      continue;
+
+    if (init_v == last_drone_existing_cluster_ids[current_drone][match_index]) {
+      ++match_index;
+      if (match_index == (int)last_drone_existing_cluster_ids[current_drone].size()) {
+        ++current_drone;
+        match_index = 0;
+        skipEmptyRoutes();
       }
     }
   }
+
+  p_brk.clear();
+  p_brk.reserve(std::max(0, drone_num - 1));
+  int route_end = -1;
+  for (int drone_id = 0; drone_id < drone_num - 1; ++drone_id) {
+    route_end += route_lengths[drone_id];
+    p_brk.push_back(route_end);
+  }
   Eigen::Map<Eigen::VectorXi> tmp_rte(init_value.data(), init_value.size());
 
-  p_brk = init_brk;
   p_rte = tmp_rte;
 }
 
@@ -1864,15 +1876,14 @@ vector<int> HeterogenousPlannerManager::randperm(int n)
 
 std::vector<int> HeterogenousPlannerManager::randBreakIdx(int max_salesmen, int n)
 {
-    // 如果只有一个推销员或n无效，返回空列表
-    if (max_salesmen <= 1 || n <= 0) {
-      return std::vector<int>();
-    }
+  if (max_salesmen <= 1 || n <= 0) {
+    return std::vector<int>();
+  }
   int num_brks = max_salesmen - 1;
   std::vector<int> breaks(num_brks);
   std::random_device rd;
   std::mt19937 gen(rd());
-  std::uniform_int_distribution<int> dis(0, n - 1);
+  std::uniform_int_distribution<int> dis(-1, n - 1);
   for (int i = 0; i < num_brks; ++i) {
     breaks[i] = dis(gen);
   }
@@ -1901,45 +1912,15 @@ MatrixXi HeterogenousPlannerManager::calcRange(const vector<int>& p_brk, int n)
   }
 
   MatrixXi rng(p_brk.size() + 1, 2);
-  int flag = 1;
+  int start_idx = 0;
   for (int i = 0; i < (int)p_brk.size(); ++i) {
-    if (flag == 1 && p_brk[i] > 0) {
-      rng(i, 0) = 0;
-      rng(i, 1) = p_brk[i];
-      flag = 0;
-    }
-    else if (flag == 1) {
-      rng(i, 0) = 0;
-      rng(i, 1) = -1;
-    }
-    else if (p_brk[i] <= p_brk[i - 1]) {
-      rng(i, 0) = p_brk[i - 1];
-      rng(i, 1) = p_brk[i];
-    }
-    else if (i < (int)p_brk.size() - 1) {
-      rng(i, 0) = p_brk[i - 1] + 1;
-      rng(i, 1) = p_brk[i];
-    }
-    else {
-      rng(i, 0) = p_brk[i - 1] + 1;
-      rng(i, 1) = p_brk[i];
-    }
+    rng(i, 0) = start_idx;
+    rng(i, 1) = p_brk[i];
+    start_idx = p_brk[i] + 1;
   }
 
-  if (p_brk[p_brk.size() - 1] < n - 1 && p_brk[p_brk.size() - 1] != 0) {
-    rng(p_brk.size(), 0) = p_brk[p_brk.size() - 1] + 1;
-    rng(p_brk.size(), 1) = n - 1;
-  }
-  else if (p_brk[p_brk.size() - 1] < n - 1 && p_brk[p_brk.size() - 1] == 0) {
-    rng(p_brk.size(), 0) = p_brk[p_brk.size() - 1];
-    rng(p_brk.size(), 1) = n - 1;
-  }
-  else {
-    rng(p_brk.size(), 0) = p_brk[p_brk.size() - 1];
-    rng(p_brk.size(), 1) = n - 2;
-  }
-  // ROS_WARN_STREAM("range matrix:");
-  // ROS_WARN_STREAM(rng);
+  rng(p_brk.size(), 0) = start_idx;
+  rng(p_brk.size(), 1) = n - 1;
   return rng;
 }
 
@@ -1949,10 +1930,6 @@ double HeterogenousPlannerManager::calculateTourConsistent(int drone_id, const v
 {
   if (last_drone_existing_cluster_ids[drone_id].size() == 0 || Tour.size() == 2)
     return 0.0;
-  for (int i = 0; i < (int)last_drone_existing_cluster_ids.size(); i++) {
-    if (last_drone_existing_cluster_ids[i].size() == 0)
-      return 0.0;
-  }
 
   double consistent = 0.0;
   double dist = 0.0;
