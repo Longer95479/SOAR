@@ -3,6 +3,7 @@
 #include <thread>
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <random>
 #include <numeric>
 #include <active_perception/graph_node.h>
@@ -114,8 +115,8 @@ int HeterogenousPlannerManager::planNextMotion(const Vector3d& pos, const Vector
   hd_->surface_views_.clear();
   hd_->global_tour_.clear();
 
-  Vector3d next_pos;
-  double next_yaw;
+  Vector3d next_pos = pos;
+  double next_yaw = yaw(0);
   if (frontier_finder_->isExplorer()) {
     /******** surface frontier-based exploration ********/
 
@@ -213,19 +214,35 @@ int HeterogenousPlannerManager::planNextMotion(const Vector3d& pos, const Vector
     if (hd_->points_.size() > 1) {
       vector<int> indices;
       findGlobalTour(pos, vel, yaw, indices);
+      if (indices.empty() || indices[0] < 0 || indices[0] >= (int)hd_->points_.size() ||
+          indices[0] >= (int)hd_->yaws_.size()) {
+        ROS_ERROR("%sFailed to obtain a valid global tour.", color_map_[hp_->drone_id_].c_str());
+        return FAIL;
+      }
 
       next_pos = hd_->points_[indices[0]];
       next_yaw = hd_->yaws_[indices[0]];
     }
     else if (hd_->points_.size() == 1) {
+      if (hd_->yaws_.empty()) {
+        ROS_ERROR("%sSingle destination exists but yaw is missing.",
+            color_map_[hp_->drone_id_].c_str());
+        return FAIL;
+      }
       frontier_finder_->updateFrontierCostMatrix();
       hd_->global_tour_ = { pos, hd_->points_[0] };
 
       next_pos = hd_->points_[0];
       next_yaw = hd_->yaws_[0];
     }
-    else
-      ROS_ERROR("%sEmpty destination.", color_map_[hp_->drone_id_].c_str());
+    else {
+      if (!hd_->frontiers_.empty()) {
+        ROS_ERROR("%sEmpty destination.", color_map_[hp_->drone_id_].c_str());
+        return FAIL;
+      }
+      ROS_WARN("%sNo exploration destination because no frontier remains.",
+          color_map_[hp_->drone_id_].c_str());
+    }
 
     double exploration_tsp_time = (ros::Time::now() - t1).toSec();
     t1 = ros::Time::now();
@@ -739,6 +756,7 @@ void HeterogenousPlannerManager::findViewpointsTour(const Vector3d& cur_pos,
     const Vector3d& cur_vel, const double& cur_yaw, const double& cur_pitch,
     const vector<VectorXd>& viewpoints, vector<int>& indices)
 {
+  indices.clear();
   auto t1 = ros::Time::now();
   Eigen::MatrixXd cost_mat;
   VectorXd drone_pose(5);
@@ -792,21 +810,39 @@ void HeterogenousPlannerManager::findViewpointsTour(const Vector3d& cur_pos,
 
   // Read optimal tour from the tour section of result file
   ifstream res_file(hp_->mtsp_dir_ + "/coverage_atsp_" + to_string(hp_->drone_id_) + ".tour");
+  if (!res_file.is_open()) {
+    ROS_ERROR("Failed to open coverage ATSP result file.");
+    return;
+  }
   string res;
+  bool found_tour_section = false;
   while (getline(res_file, res)) {
     // Go to tour section
-    if (res.compare("TOUR_SECTION") == 0)
+    if (res.compare("TOUR_SECTION") == 0) {
+      found_tour_section = true;
       break;
+    }
+  }
+  if (!found_tour_section) {
+    ROS_ERROR("Coverage ATSP result missing TOUR_SECTION.");
+    return;
   }
 
   // Read path for ATSP formulation
   while (getline(res_file, res)) {
+    if (res.empty())
+      continue;
     // Read indices of frontiers in optimal tour
-    int id = stoi(res);
+    std::stringstream ss(res);
+    int id = 0;
+    if (!(ss >> id))
+      continue;
     if (id == 1)  // Ignore the current state
       continue;
     if (id == -1)
       break;
+    if (id < 2 || id > dimension)
+      continue;
     indices.push_back(id - 2);
   }
 
@@ -929,6 +965,8 @@ void HeterogenousPlannerManager::findClustersDronesTour(const vector<ViewpointCl
     const vector<VectorXd>& drones_pos, vector<vector<int>>& drone_indices)
 {
   auto t1 = ros::Time::now();
+  drone_indices.clear();
+  drone_indices.resize(drones_pos.size());
 
   // Get cost matrix for current state and clusters
   Eigen::MatrixXd cost_mat;
@@ -982,18 +1020,32 @@ void HeterogenousPlannerManager::findClustersDronesTour(const vector<ViewpointCl
 
   // Read optimal tour from the tour section of result file
   ifstream res_file(hp_->mtsp_dir_ + "/amtsp3_" + to_string(hp_->drone_id_) + ".tour");
+  if (!res_file.is_open()) {
+    ROS_ERROR("Failed to open cluster MTSP result file.");
+    return;
+  }
   string res;
+  bool found_tour_section = false;
   while (getline(res_file, res)) {
     // Go to tour section
-    if (res.compare("TOUR_SECTION") == 0)
+    if (res.compare("TOUR_SECTION") == 0) {
+      found_tour_section = true;
       break;
+    }
+  }
+  if (!found_tour_section) {
+    ROS_ERROR("Cluster MTSP result missing TOUR_SECTION.");
+    return;
   }
   int drone_id = -1;
-  drone_indices.clear();
-  drone_indices.resize(drone_num);
   while (getline(res_file, res)) {
+    if (res.empty())
+      continue;
     // Read indices of frontiers in optimal tour
-    int id = stoi(res);
+    std::stringstream ss(res);
+    int id = 0;
+    if (!(ss >> id))
+      continue;
     if (id == 1)  // Ignore the current state
       continue;
     if (id > dimension)
@@ -1004,6 +1056,8 @@ void HeterogenousPlannerManager::findClustersDronesTour(const vector<ViewpointCl
       drone_id = id - 2;
     }
     else {
+      if (drone_id < 0 || drone_id >= drone_num)
+        continue;
       drone_indices[drone_id].push_back(id - drone_num - 2);
     }
   }
@@ -1107,6 +1161,7 @@ void HeterogenousPlannerManager::getViewpointClustersMatrix(
 void HeterogenousPlannerManager::findGlobalTour(
     const Vector3d& cur_pos, const Vector3d& cur_vel, const Vector3d& cur_yaw, vector<int>& indices)
 {
+  indices.clear();
   /* change ATSP to lhk3 */
   auto t1 = ros::Time::now();
 
@@ -1168,21 +1223,39 @@ void HeterogenousPlannerManager::findGlobalTour(
 
   // Read optimal tour from the tour section of result file
   ifstream res_file(hp_->mtsp_dir_ + "/exploration_atsp_" + to_string(hp_->drone_id_) + ".tour");
+  if (!res_file.is_open()) {
+    ROS_ERROR("Failed to open exploration ATSP result file.");
+    return;
+  }
   string res;
+  bool found_tour_section = false;
   while (getline(res_file, res)) {
     // Go to tour section
-    if (res.compare("TOUR_SECTION") == 0)
+    if (res.compare("TOUR_SECTION") == 0) {
+      found_tour_section = true;
       break;
+    }
+  }
+  if (!found_tour_section) {
+    ROS_ERROR("Exploration ATSP result missing TOUR_SECTION.");
+    return;
   }
 
   // Read path for ATSP formulation
   while (getline(res_file, res)) {
+    if (res.empty())
+      continue;
     // Read indices of frontiers in optimal tour
-    int id = stoi(res);
+    std::stringstream ss(res);
+    int id = 0;
+    if (!(ss >> id))
+      continue;
     if (id == 1)  // Ignore the current state
       continue;
     if (id == -1)
       break;
+    if (id < 2 || id > dimension)
+      continue;
     indices.push_back(id - 2);  // Idx of solver-2 == Idx of frontier
   }
 
@@ -1321,6 +1394,7 @@ void HeterogenousPlannerManager::findClustersDronesTourV2(const vector<VectorXd>
 {
   auto t1 = ros::Time::now();
   drone_indices.clear();
+  drone_indices.resize(drones_pos.size());
 
   // Get cost matrix for current state and clusters
   Eigen::MatrixXd cost_mat;
@@ -1374,18 +1448,32 @@ void HeterogenousPlannerManager::findClustersDronesTourV2(const vector<VectorXd>
 
   // Read optimal tour from the tour section of result file
   ifstream res_file(hp_->mtsp_dir_ + "/amtsp3_" + to_string(hp_->drone_id_) + ".tour");
+  if (!res_file.is_open()) {
+    ROS_ERROR("Failed to open cluster MTSPV2 result file.");
+    return;
+  }
   string res;
+  bool found_tour_section = false;
   while (getline(res_file, res)) {
     // Go to tour section
-    if (res.compare("TOUR_SECTION") == 0)
+    if (res.compare("TOUR_SECTION") == 0) {
+      found_tour_section = true;
       break;
+    }
+  }
+  if (!found_tour_section) {
+    ROS_ERROR("Cluster MTSPV2 result missing TOUR_SECTION.");
+    return;
   }
   int drone_id = -1;
-  drone_indices.clear();
-  drone_indices.resize(drone_num);
   while (getline(res_file, res)) {
+    if (res.empty())
+      continue;
     // Read indices of frontiers in optimal tour
-    int id = stoi(res);
+    std::stringstream ss(res);
+    int id = 0;
+    if (!(ss >> id))
+      continue;
     if (id == 1)  // Ignore the current state
       continue;
     if (id > dimension)
@@ -1396,6 +1484,8 @@ void HeterogenousPlannerManager::findClustersDronesTourV2(const vector<VectorXd>
       drone_id = id - 2;
     }
     else {
+      if (drone_id < 0 || drone_id >= drone_num)
+        continue;
       drone_indices[drone_id].push_back(id - drone_num - 2);
     }
   }

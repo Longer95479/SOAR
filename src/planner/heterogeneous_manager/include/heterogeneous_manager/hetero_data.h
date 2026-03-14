@@ -38,15 +38,15 @@ struct DroneState {
   Eigen::Vector3d vel_;
   double pitch_;
   double yaw_;
-  double stamp_;                 // Stamp of pos,vel,yaw
-  double recent_attempt_time_;   // Stamp of latest opt attempt with any drone
-  double recent_interact_time_;  // Stamp of latest opt with this drone
+  double stamp_{ 0.0 };                 // Stamp of pos,vel,yaw
+  double recent_attempt_time_{ 0.0 };   // Stamp of latest opt attempt with any drone
+  double recent_interact_time_{ 0.0 };  // Stamp of latest opt with this drone
 };
 
 struct ViewpointsTask {
   int drone_id_;
-  double stamp_;
-  double recent_attempt_time_;
+  double stamp_{ 0.0 };
+  double recent_attempt_time_{ 0.0 };
   vector<int> orders_;
   vector<Vector3d> points_;
   vector<double> pitchs_;
@@ -57,7 +57,7 @@ struct PlannerData {
   int traj_id_;
   int drone_id_;
   ros::Time start_time_;
-  int duration_;
+  double duration_{ 0.0 };
   Trajectory<7> minco_pos_traj_, minco_picth_traj_, minco_yaw_traj_, minco_pitch_traj_;
   minco::MINCO_S4NU minco_pos_anal_, minco_pitch_anal_, minco_yaw_anal_;
 };

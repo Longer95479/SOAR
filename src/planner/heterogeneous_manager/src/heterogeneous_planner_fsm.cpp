@@ -31,6 +31,19 @@ void HeterogeneousPlannerFSM::init(ros::NodeHandle& nh)
   fd_->state_str_ = { "INIT", "WAIT_TRIGGER", "PLAN_TRAJ", "PUB_TRAJ", "EXEC_TRAJ", "FINISH" };
   fd_->static_state_ = true;
   fd_->trigger_ = false;
+  fd_->odom_pos_.setZero();
+  fd_->odom_vel_.setZero();
+  fd_->odom_orient_.setIdentity();
+  fd_->odom_yaw_ = 0.0;
+  fd_->odom_camera_yaw_ = 0.0;
+  fd_->odom_camera_pitch_ = 0.0;
+  fd_->start_pt_.setZero();
+  fd_->start_vel_.setZero();
+  fd_->start_acc_.setZero();
+  fd_->start_yaw_.setZero();
+  fd_->dis_to_next_vp = 0.0;
+  fd_->camera_pitch = 0.0;
+  fd_->camera_yaw = 0.0;
 
   resolution_ = hetero_manager_->getResolution();
   drone_num_ = (int)hetero_manager_->hd_->swarm_state_.size();
@@ -354,7 +367,7 @@ void HeterogeneousPlannerFSM::polyTraj2ROSMsg(quadrotor_msgs::PolyTraj& poly_msg
   poly_msg.order = 7;
   poly_msg.duration.resize(piece_num);
   poly_msg.yaw_duration.resize(yaw_piece_num);
-  poly_msg.pitch_duration.resize(yaw_piece_num);
+  poly_msg.pitch_duration.resize(pitch_piece_num);
   poly_msg.start_time = data.start_time_;
   poly_msg.coef_x.resize(8 * piece_num);
   poly_msg.coef_y.resize(8 * piece_num);
@@ -675,6 +688,12 @@ void HeterogeneousPlannerFSM::safetyCallback(const ros::TimerEvent& e)
       Eigen::Vector3d ap_yaw = info->minco_yaw_traj_.getPos(t_r);
       fd_->odom_camera_yaw_ = atan2(ap_yaw(1), ap_yaw(0) + 1e-6);
     }
+    else {
+      fd_->odom_camera_pitch_ = 0.0;
+      fd_->odom_camera_yaw_ = fd_->odom_yaw_;
+    }
+    if (!fd_->have_odom_)
+      return;
     hetero_manager_->surface_coverage_->updateSeenCells(
         fd_->odom_pos_, fd_->odom_camera_pitch_, fd_->odom_camera_yaw_);
   }
@@ -697,6 +716,10 @@ void HeterogeneousPlannerFSM::odometryCallback(const nav_msgs::OdometryConstPtr&
 
   Eigen::Vector3d rot_x = fd_->odom_orient_.toRotationMatrix().block<3, 1>(0, 0);
   fd_->odom_yaw_ = atan2(rot_x(1), rot_x(0));
+  if (state_ != FSM_STATE::EXEC_TRAJ) {
+    fd_->odom_camera_pitch_ = 0.0;
+    fd_->odom_camera_yaw_ = fd_->odom_yaw_;
+  }
 
   fd_->have_odom_ = true;
 
@@ -768,6 +791,8 @@ void HeterogeneousPlannerFSM::taskAssignmentMsgCallback(
     return;
 
   if (msg->drone_id >= drone_num_)
+    return;
+  if (msg->drone_id < 0)
     return;
 
   // Every photographer has all photographers' task asignment information
@@ -841,6 +866,8 @@ void HeterogeneousPlannerFSM::droneStateMsgCallback(
 {
   // Only update other drones' states
   if (msg->drone_id == getSlfDroneId())
+    return;
+  if (msg->drone_id < 0 || msg->drone_id >= drone_num_)
     return;
 
   auto& drone_state = hetero_manager_->hd_->swarm_state_[msg->drone_id];
