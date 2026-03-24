@@ -22,6 +22,7 @@ SurfaceCoverage::SurfaceCoverage(const EDTEnvironment::Ptr& edt, ros::NodeHandle
 
   nh.param("coverage_manager/ikdtree_downsample_resolution", ikdtree_downsample_resolution_, 0.1);
   nh.param("coverage_manager/iter_update_num", iter_update_num_, 0);
+  nh.param("coverage_manager/use_uniqueness_score", use_uniqueness_score_, false);
   nh.param("coverage_manager/coverage_downsample_resolution", coverage_downsample_resolution_, 0.2);
   nh.param("coverage_manager/pitch_upper", pitch_upper_, 80.0);
   nh.param("coverage_manager/pitch_lower", pitch_lower_, -70.0);
@@ -758,17 +759,35 @@ void SurfaceCoverage::surfaceViewpointsGeneration()
       uncovered_all_pt_ids.push_back(nearest_indices[0]);
     }
   }
+  // Publish uncovered cloud
+  uncovered_cloud.width = uncovered_cloud.points.size();
+  uncovered_cloud.height = 1;
+  uncovered_cloud.is_dense = true;
+  uncovered_cloud.header.frame_id = frame_id_;
+  sensor_msgs::PointCloud2 uncovered_cloud_msg;
+  pcl::toROSMsg(uncovered_cloud, uncovered_cloud_msg);
+  uncovered_cloud_pub_.publish(uncovered_cloud_msg);
+
 
   int sum_seen = 0;
   for (auto final_vp : VR.final_vps_) {
     sum_seen += final_vp.vox_count;
   }
 
+  int sum_seen_by_state = 0;
+  for (auto state: VR.cover_state_all_) {
+    if (state) sum_seen_by_state++;
+  }
+
   ROS_WARN(
       "\033[1;32m[Coverage Manager] Number of Total Voxels = %d", (int)VR.cover_state_all_.size());
   ROS_WARN("\033[1;32m[Coverage Manager] Seen all voxels num = %d", sum_seen);
+  ROS_WARN("\033[1;32m[Coverage Manager] Seen all voxels num = %d calculated by cover state", 
+      sum_seen_by_state);
   ROS_WARN("\033[1;32m[Coverage Manager] Number of Uncovered Voxels = %d",
       (int)uncovered_all_pt_ids.size());
+  // ROS_WARN("\033[1;32m[Coverage Manager] Number of Uncovered Filtered Voxels = %d",
+  //     (int)VR.uncovered_filtered_pt_ids_.size());
 
   // Generate viewpoints corresponding to uncovered point clouds.
   VR.pt_idx_normal_pairs_.clear();
@@ -815,7 +834,7 @@ void SurfaceCoverage::surfaceViewpointsGeneration()
     ROS_INFO("\033[1;34m[Coverage Manager] Iter_%d Uncovered Start", unc_iter);
     last_unc_num = (int)uncovered_all_pt_ids.size();
 
-    // The overall state of the point cloud before the last iteration
+    // The overall state of the point cloud before the latest iteration
     vector<bool> tempCoverState;
     vector<int> tempCoverContribNum;
     vector<int> tempContribId;
@@ -858,13 +877,22 @@ void SurfaceCoverage::surfaceViewpointsGeneration()
     vector<int> before_vps_voxcount, temp_vps_voxcount;
     before_vps_voxcount = VR.vps_voxcount_;
 
+    if (use_uniqueness_score_) {
+      vector<int> initial_ids(tempVps.size());
+      for(int j=0; j<tempVps.size(); ++j) initial_ids[j] = oriVpNum + j;
+      calculateUniquenessScores(tempVps, tempVpsDir, initial_ids);
+    }
+
     for (int i = 0; i < (int)tempVps.size(); ++i) {
       Eigen::VectorXd pose_unc(5);
       Vector2d dir = getPitchYaw(tempVpsDir[i]);
       Vector3d pos = Vector3d(tempVps[i].x, tempVps[i].y, tempVps[i].z);
       pose_unc << pos(0), pos(1), pos(2), dir(0), dir(1);
       int vp_id = oriVpNum + i;
-      updateViewpointInfo(pose_unc, vp_id);
+
+      if (!use_uniqueness_score_) 
+        updateViewpointInfo(pose_unc, vp_id);
+
       pose_set_unc.row(i) = pose_unc;
 
       // For viewpoint visualization
@@ -928,20 +956,31 @@ void SurfaceCoverage::surfaceViewpointsGeneration()
       //           VR.all_iter_num_, final_vp.vp_id, final_vp.vox_count);
       sum_seen += final_vp.vox_count;
     }
+    sum_seen_by_state = 0;
+    for (auto state: VR.cover_state_all_) {
+      if (state) sum_seen_by_state++;
+    }
     ROS_WARN("\033[1;34m[Coverage Manager] Iter_%d Number of Total Voxels = %d", VR.all_iter_num_,
         (int)VR.cover_state_all_.size());
     ROS_WARN("\033[1;34m[Coverage Manager] Iter_%d Seen all voxels num = %d", VR.all_iter_num_,
         sum_seen);
+    ROS_WARN("\033[1;34m[Coverage Manager] Iter_%d Seen all voxels num = %d by cover state", VR.all_iter_num_,
+        sum_seen_by_state);
+    // ROS_WARN("\033[1;34m[Coverage Manager] Iter_%d Number of Uncovered Filtered Points = %d",
+    //     VR.all_iter_num_, (int)VR.uncovered_filtered_pt_ids_.size());
+    ROS_WARN("\033[1;34m[Coverage Manager] Iter_%d Number of Uncovered Points = %d",
+        VR.all_iter_num_, (int)uncovered_all_pt_ids.size());
     ROS_WARN("\033[1;34m[Coverage Manager] Iter_%d Now final viewpoint num = %d", VR.all_iter_num_,
         (int)VR.final_vps_.size());
-    // ROS_WARN("\033[1;34m[Coverage Manager] Iter_%d Number of Uncovered Points = %d",
-    //     VR.all_iter_num_, (int)uncovered_all_pt_ids.size());
 
     unc_iter++;
     VR.last_vps_num_ = VR.vps_pose_.rows();
   }
 
   VR.new_filtered_pts_.clear();
+  if (use_uniqueness_score_) {
+    VR.point_to_vps_map_.clear();
+  }
   ROS_WARN("\033[1;32m[Coverage Manager] SurfaceViewpointsGeneration Total time = %f",
       (ros::Time::now() - t1).toSec());
 }
@@ -1011,10 +1050,43 @@ void SurfaceCoverage::viewpointsPrune(Eigen::MatrixXd vps_pose, vector<int> vps_
   }
 
   // 存之前的
-  for (auto& pair : VR.idx_viewpoints_) {
-    if (VR.idx_live_state_.find(pair.first)->second == true) {
-      updateViewpointInfo(pair.second, pair.first);
+  if (use_uniqueness_score_) {
+
+    // 1. 准备幸存者数据
+    vector<int> survivors_ids;
+    vector<pcl::PointXYZ> survivors_pos;
+	vector<Vector3d> survivors_dir;
+    for (auto& pair : VR.idx_viewpoints_) {
+      if (VR.idx_live_state_.find(pair.first)->second == true) {
+        // 安全性检查：防止引力模型把视角拉进墙里 (解决 No path 报错)
+        if (edt_env_->sdf_map_->getInflateOccupancy(static_cast<Vector3d>(pair.second.head(3))) == 1) {
+          VR.idx_live_state_[pair.first] = false;
+          continue;                      
+        }
+        
+        survivors_ids.push_back(pair.first);
+        survivors_pos.push_back(pcl::PointXYZ(pair.second(0), pair.second(1), pair.second(2)));
+
+        // 根据 pitch/yaw 转回方向向量                                                               
+        double p = pair.second(3), y = pair.second(4);
+        survivors_dir.push_back(Vector3d(cos(p)*cos(y), cos(p)*sin(y), sin(p)));
+      }
     }
+
+    // 2. 调用共用的批量打分函数处理幸存子集
+	if (!survivors_ids.empty()) {
+      calculateUniquenessScores(survivors_pos, survivors_dir, survivors_ids);
+    }
+
+  }
+  else {
+
+    for (auto& pair : VR.idx_viewpoints_) {
+      if (VR.idx_live_state_.find(pair.first)->second == true) {
+        updateViewpointInfo(pair.second, pair.first);
+      }
+    }
+
   }
   // 赋值之前的
 
@@ -1168,7 +1240,6 @@ void SurfaceCoverage::computeUncoveredViewpointsUsingSdfGrad(
       1.0, "[computeUncoveredViewpointsUsingSdfGrad] cost time: %lf", (ros::Time::now() - t1).toSec());
 }
 
-
 /*****  新表面的点云有可能被已有的视角看到，应标记或剔除   *****/
 void SurfaceCoverage::updateNewPts(const vector<Vector3d>& pts, vector<bool>& cover_state,
     vector<int>& cover_contrib_num, vector<int>& contrib_id)
@@ -1223,9 +1294,117 @@ void SurfaceCoverage::updateNewPts(const vector<Vector3d>& pts, vector<bool>& co
   }
 }
 
+void SurfaceCoverage::calculateUniquenessScores(const vector<pcl::PointXYZ> &tempVps, 
+        const vector<Vector3d> &tempVpsDir, const vector<int> &vpIds)
+{
+  ROS_WARN("[calculateUniquenessScores]");
+  vector<map<int, Eigen::Vector3d>> valid_voxs(tempVps.size());  // 视野内未覆盖被该视角观测到的点云 idx - 对应位置
+
+  // 1. 计算每个点云的被视信息，为分数计算提供基础
+  for (int j = 0; j < (int)tempVps.size(); ++j) {
+    int vp_id = vpIds[j];
+
+    Vector3d pos = Vector3d(tempVps[j].x, tempVps[j].y, tempVps[j].z);
+    Vector2d dir = getPitchYaw(tempVpsDir[j]);
+    double pitch = dir(0);
+    double yaw = dir(1);
+    percep_utils_->setPose_PY(pos, pitch, yaw);
+
+    // 去看未覆盖点云
+    vector<int> index_set; // 该视角范围内的未覆盖点云 idx
+    for (int i = 0; i < (int)VR.uncovered_filtered_pt_ids_.size(); i++) {
+      Vector3d pt = VR.all_filtered_pts_[VR.uncovered_filtered_pt_ids_[i]];
+      if (percep_utils_->insideFOV(pt)) {
+        index_set.push_back(VR.uncovered_filtered_pt_ids_[i]);
+      }
+    }
+
+    for (int i = 0; i < (int)index_set.size(); i++) {
+      Vector3d pos1 = pos;
+      Vector3d pos2 = VR.all_filtered_pts_[index_set[i]];
+      Vector3i idx, idx_rev;
+
+      raycaster_->input(pos1, pos2);
+      Eigen::Vector3i idx_cell;
+      edt_env_->sdf_map_->posToIndex(pos2, idx_cell);
+      while (raycaster_->nextId(idx)) {
+        if (edt_env_->sdf_map_->getOccupancy(idx) != SDFMap::FREE) {
+          break;
+        }
+      }
+      vector<Eigen::Vector3i> nbrs;
+      nbrs = allNeighbors(idx_cell);
+      nbrs.push_back(idx_cell);
+      for (auto nbr : nbrs) {
+        if (idx == nbr) {
+          valid_voxs[j][index_set[i]] = pos2;
+          VR.point_to_vps_map_[index_set[i]].push_back(vp_id);
+          break;
+        }
+      }
+    }
+
+  }
+
+  // 2. 计算视角分数
+  // ROS_WARN("[calculateUniquenessScores] sz stat");
+  for (int j = 0; j < (int)tempVps.size(); ++j) {
+    int vp_id = vpIds[j];
+    for (const auto& val_id_vox : valid_voxs[j]) {
+      auto sz = VR.point_to_vps_map_[val_id_vox.first].size();
+      // ROS_WARN("vp %d pt %d : %ld", vp_id, val_id_vox.first, sz);
+      if (sz == 0) {
+        ROS_WARN("Voxel %d has ZERO covering viewpoints!", val_id_vox.first);
+        continue;
+      }
+      double score = 1.0 / static_cast<double>(sz) * 1000;
+      VR.vps_contri_num_[vp_id] += static_cast<int>(floor(score));
+    }
+  }
+  // ROS_WARN("[calculateUniquenessScores] sz stat end");
+
+  // ROS_WARN("[calculateUniquenessScores] score stat");
+  for (int j = 0; j < (int)tempVps.size(); ++j) {
+    int vp_id = vpIds[j];
+    // ROS_WARN("vp %d : %d", vp_id, VR.vps_contri_num_[vp_id]);
+  }
+  // ROS_WARN("[calculateUniquenessScores] score stat end");
+
+  // 3. 计算排他控制点数
+  for (int j = 0; j < (int)tempVps.size(); ++j) {
+    int vp_id = vpIds[j];
+    for (const auto& val_id_vox : valid_voxs[j]) {
+      // 该点云第一次被覆盖
+      if (VR.cover_state_all_[val_id_vox.first] == false) {
+        VR.cover_state_all_[val_id_vox.first] = true;
+        VR.cover_contrib_num_all_[val_id_vox.first] = VR.vps_contri_num_[vp_id];
+        VR.contrib_id_all_[val_id_vox.first] = vp_id;
+
+        VR.vps_voxcount_[vp_id] += 1;
+      }
+      else {
+        // 现在的贡献数比之前的高
+        if (VR.vps_contri_num_[vp_id] > VR.cover_contrib_num_all_[val_id_vox.first]) {
+          int before_vp_id = VR.contrib_id_all_[val_id_vox.first];
+          // 这是只会更新这次迭代更新所新增加的点云（不会更新之前迭代更新的（可以理解成冻结了））
+          if (before_vp_id >= VR.last_vps_num_) {
+            VR.vps_voxcount_[before_vp_id] -= 1;
+
+            VR.cover_contrib_num_all_[val_id_vox.first] = VR.vps_contri_num_[vp_id];
+            VR.contrib_id_all_[val_id_vox.first] = vp_id;
+            VR.vps_voxcount_[vp_id] += 1;
+          }
+        }
+      }
+    }
+
+  }
+
+}
+
 void SurfaceCoverage::updateViewpointInfo(Eigen::VectorXd& pose, const int& vp_id)
 {
-  vector<int> index_set;
+  vector<int> index_set; // 该视角范围内的未覆盖点云 idx
   Vector3d pos = Vector3d(pose(0), pose(1), pose(2));
   double pitch = pose(3);
   double yaw = pose(4);
@@ -1239,7 +1418,7 @@ void SurfaceCoverage::updateViewpointInfo(Eigen::VectorXd& pose, const int& vp_i
   }
 
   int contribute_voxel_num = 0;
-  map<int, Eigen::Vector3d> valid_vox;
+  map<int, Eigen::Vector3d> valid_vox;  // 视野内未覆盖点云 idx - 对应位置
 
   for (int i = 0; i < (int)index_set.size(); i++) {
     Vector3d pos1 = pos;

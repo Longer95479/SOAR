@@ -94,15 +94,21 @@ struct ViewpointResult {
 
   /* viewpoints info */
   Eigen::MatrixXd vps_pose_;
-  vector<int> vps_voxcount_;  // contain the number of voxels covered by each viewpoint
-  vector<int> vps_contri_num_;
+  vector<int> vps_voxcount_;    // contain the number of voxels covered by each viewpoint
+  vector<int> vps_contri_num_;  // 分数或贡献值
 
   /* point cloud info */
   vector<bool> cover_state_all_;
   vector<int> cover_contrib_num_all_;  // 该pt所归属的vp对应的可见点云个数
   vector<int> contrib_id_all_;         // [sub-space id, vp id]
 
-  /* viewpoints prune */
+  /* calculate uniqueness scores */
+  // 记录每个未覆盖点可以被哪些视点看到
+  // Key: 未覆盖点的索引 (在 VR.all_filtered_pts_ 中)
+  // Value: 能看到该点的候选视点索引列表
+  map<int, std::vector<int>> point_to_vps_map_;
+
+    /* viewpoints prune */
   double prune_radius_;
   map<Eigen::Vector3d, int, Vector3dCompare> inverse_idx_;
   map<int, Eigen::VectorXd> idx_viewpoints_;  // [vp_id]: viewpoint pose
@@ -180,7 +186,9 @@ private:
   // Viewpoint Prune and Iter Update
   void updateNewPts(const vector<Vector3d>& pts, vector<bool>& cover_state,
       vector<int>& cover_contrib_num, vector<int>& contrib_id);
-  void updateViewpointInfo(Eigen::VectorXd& pos, const int& vp_id);
+  void updateViewpointInfo(Eigen::VectorXd& pose, const int& vp_id);
+  void calculateUniquenessScores(const vector<pcl::PointXYZ> &tempVps, 
+      const vector<Vector3d> &tempVpsDir, const vector<int> &vpIds);
   void updatePoseGravitation(
       pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud, const vector<int>& inner_ids, const int& cur_idx);
   void viewpointsPrune(Eigen::MatrixXd vps_pose, vector<int> vps_voxcount);
@@ -219,6 +227,7 @@ private:
   bool vis_flag_ = false;
   bool start_vp_gen_flag_ = true;
   bool global_viewpoint_generation_ = false;
+  bool use_uniqueness_score_;
   int frozen_surface_min_num_;
   ros::Timer vis_timer_;
 
