@@ -642,6 +642,7 @@ bool SurfaceCoverage::splitSurfaceIn3D(const Surface& surface, list<Surface>& sp
   return true;
 }
 
+/*****  提取完整探索表面的点云，并设置为已提取  *****/
 void SurfaceCoverage::updateSurfaceState()
 {
   for (auto& surface : surfaces_) {
@@ -766,8 +767,8 @@ void SurfaceCoverage::surfaceViewpointsGeneration()
   ROS_WARN(
       "\033[1;32m[Coverage Manager] Number of Total Voxels = %d", (int)VR.cover_state_all_.size());
   ROS_WARN("\033[1;32m[Coverage Manager] Seen all voxels num = %d", sum_seen);
-  // ROS_WARN("\033[1;32m[Coverage Manager] Number of Uncovered Voxels = %d",
-  //     (int)uncovered_all_pt_ids.size());
+  ROS_WARN("\033[1;32m[Coverage Manager] Number of Uncovered Voxels = %d",
+      (int)uncovered_all_pt_ids.size());
 
   // Generate viewpoints corresponding to uncovered point clouds.
   VR.pt_idx_normal_pairs_.clear();
@@ -782,6 +783,8 @@ void SurfaceCoverage::surfaceViewpointsGeneration()
   pcl::PointCloud<pcl::Normal>::Ptr uncovered_normals(new pcl::PointCloud<pcl::Normal>());
   ne.compute(*uncovered_normals);
 
+  ros::Time t_comp_uncvp = ros::Time::now();
+  // [unc_id, vps] 全局的未被覆盖的点云 idx 和 对应生成的初始视角
   map<int, vector<pcl::PointNormal>> all_uncovered_vps;
   for (int i = 0; i < (int)uncovered_all_pt_ids.size(); ++i) {
     int unc_id = uncovered_all_pt_ids[i];
@@ -794,11 +797,15 @@ void SurfaceCoverage::surfaceViewpointsGeneration()
     VR.pt_idx_normal_pairs_[unc_id] = normal_vector.normalized();
 
     vector<pcl::PointNormal> tmp_uncovered_vps;
+    // vector<pcl::PointNormal> tmp_uncovered_vps2;
     Vector3d pt_pos(VR.all_cloud_pts_->points[unc_id].x, VR.all_cloud_pts_->points[unc_id].y,
         VR.all_cloud_pts_->points[unc_id].z);
-    computeUncoveredViewpoints(pt_pos, normal_vector, tmp_uncovered_vps);
+    // computeUncoveredViewpoints(pt_pos, normal_vector, tmp_uncovered_vps2);
+    computeUncoveredViewpointsUsingSdfGrad(pt_pos, normal_vector, tmp_uncovered_vps);
     all_uncovered_vps[unc_id] = tmp_uncovered_vps;
   }
+  ROS_WARN_THROTTLE(
+      1.0, "[computeUncoveredViewpoints] total time: %lf", (ros::Time::now() - t_comp_uncvp).toSec());
 
   int unc_iter = 0, last_unc_num = -1;
   int iter_max = iter_update_num_;
@@ -1032,6 +1039,7 @@ void SurfaceCoverage::viewpointsPrune(Eigen::MatrixXd vps_pose, vector<int> vps_
 void SurfaceCoverage::computeUncoveredViewpoints(
     const Vector3d& pt_pos, const Vector3d& pt_normal, vector<pcl::PointNormal>& unc_vps)
 {
+  ros::Time t1 = ros::Time::now();
   unc_vps.clear();
   vector<int> normal_dir{ 1, -1 };
   for (auto dir : normal_dir) {
@@ -1088,8 +1096,80 @@ void SurfaceCoverage::computeUncoveredViewpoints(
       }
     }
   }
+  ROS_WARN_THROTTLE(
+      1.0, "[computeUncoveredViewpoints] cost time: %lf", (ros::Time::now() - t1).toSec());
 }
 
+void SurfaceCoverage::computeUncoveredViewpointsUsingSdfGrad(
+    const Vector3d& pt_pos, const Vector3d& pt_normal, vector<pcl::PointNormal>& unc_vps)
+{
+  ros::Time t1 = ros::Time::now();
+  unc_vps.clear();
+  vector<int> normal_dir{ 1 };
+  for (auto dir : normal_dir) {
+    for (double dist = candidate_rmin_,
+                delta_d = (candidate_rmax_ - candidate_rmin_) / candidate_rnum_;
+         dist <= candidate_rmax_ + 1e-3; dist = dist + delta_d) {
+      Vector3d updated_normal = pt_normal;
+      double pitch = atan2(updated_normal.z(), sqrt(updated_normal.x() * updated_normal.x() +
+                                                    updated_normal.y() * updated_normal.y())) *
+                     180 / M_PI;
+      double max_pitch = pitch_upper_;
+      double min_pitch = pitch_lower_;
+      if (pitch > max_pitch)
+        pitch = max_pitch;
+      else if (pitch < min_pitch)
+        pitch = min_pitch;
+      double horizontal_length =
+          sqrt(updated_normal.x() * updated_normal.x() + updated_normal.y() * updated_normal.y());
+      double updated_z = tan(pitch * M_PI / 180.0) * horizontal_length;
+      updated_normal.z() = updated_z;
+      updated_normal.normalize();
+
+      Vector3d grad;
+      edt_env_->sdf_map_->getDistWithGrad(pt_pos, grad);
+      dir = grad.dot(updated_normal) > 0 ? 1 : -1;
+
+      Vector3d vp_pos = pt_pos + dir * dist * updated_normal;
+      if (!edt_env_->sdf_map_->isInBox(vp_pos) ||
+          edt_env_->sdf_map_->getInflateOccupancy(vp_pos) == 1 || isNearUnknown(vp_pos) ||
+          edt_env_->sdf_map_->getOccupancy(vp_pos) != SDFMap::FREE)
+        continue;
+
+      pcl::PointNormal vp;
+      vp.x = pt_pos.x() + dir * dist * updated_normal.x();
+      vp.y = pt_pos.y() + dir * dist * updated_normal.y();
+      vp.z = pt_pos.z() + dir * dist * updated_normal.z();
+      vp.normal_x = -dir * updated_normal.x();
+      vp.normal_y = -dir * updated_normal.y();
+      vp.normal_z = -dir * updated_normal.z();
+
+      Vector3d pos1 = vp_pos;
+      Vector3d pos2 = pt_pos;
+      raycaster_->input(pos1, pos2);
+      Eigen::Vector3i idx, idx_cell;
+      edt_env_->sdf_map_->posToIndex(pos2, idx_cell);
+      while (raycaster_->nextId(idx)) {
+        if (edt_env_->sdf_map_->getOccupancy(idx) != SDFMap::FREE)
+          break;
+      }
+      vector<Eigen::Vector3i> nbrs;
+      nbrs = allNeighbors(idx_cell);
+      nbrs.push_back(idx_cell);
+      for (auto nbr : nbrs) {
+        if (idx == nbr) {
+          unc_vps.push_back(vp);
+          break;
+        }
+      }
+    }
+  }
+  ROS_WARN_THROTTLE(
+      1.0, "[computeUncoveredViewpointsUsingSdfGrad] cost time: %lf", (ros::Time::now() - t1).toSec());
+}
+
+
+/*****  新表面的点云有可能被已有的视角看到，应标记或剔除   *****/
 void SurfaceCoverage::updateNewPts(const vector<Vector3d>& pts, vector<bool>& cover_state,
     vector<int>& cover_contrib_num, vector<int>& contrib_id)
 {

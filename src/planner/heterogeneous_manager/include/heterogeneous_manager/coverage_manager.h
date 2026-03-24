@@ -186,6 +186,8 @@ private:
   void viewpointsPrune(Eigen::MatrixXd vps_pose, vector<int> vps_voxcount);
   void computeUncoveredViewpoints(
       const Vector3d& pt_pos, const Vector3d& pt_normal, vector<pcl::PointNormal>& unc_vps);
+  void computeUncoveredViewpointsUsingSdfGrad(
+      const Vector3d& pt_pos, const Vector3d& pt_normal, vector<pcl::PointNormal>& unc_vps);
 
   // Utils
   bool isPointInBox(const Eigen::Vector3d& pos, const Eigen::Vector3d& update_min,
