@@ -171,7 +171,8 @@
     <param name="coverage_manager/ikdtree_downsample_resolution" value="0.15" type="double"/>
     <param name="coverage_manager/coverage_downsample_resolution" value="0.75" type="double"/>
     <param name="coverage_manager/iter_update_num" value="1" type="int"/>
-    <param name="coverage_manager/use_uniqueness_score" value="false" type="bool"/>
+    <param name="coverage_manager/use_uniqueness_score" value="true" type="bool"/>
+    <param name="coverage_manager/use_sdf_grad_filter" value="false" type="bool"/>
     <param name="coverage_manager/pitch_upper" value="80.0" type="double"/>
     <param name="coverage_manager/pitch_lower" value="-70.0" type="double"/>
 

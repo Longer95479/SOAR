@@ -23,6 +23,7 @@ SurfaceCoverage::SurfaceCoverage(const EDTEnvironment::Ptr& edt, ros::NodeHandle
   nh.param("coverage_manager/ikdtree_downsample_resolution", ikdtree_downsample_resolution_, 0.1);
   nh.param("coverage_manager/iter_update_num", iter_update_num_, 0);
   nh.param("coverage_manager/use_uniqueness_score", use_uniqueness_score_, false);
+  nh.param("coverage_manager/use_sdf_grad_filter", use_sdf_grad_filter_, false);
   nh.param("coverage_manager/coverage_downsample_resolution", coverage_downsample_resolution_, 0.2);
   nh.param("coverage_manager/pitch_upper", pitch_upper_, 80.0);
   nh.param("coverage_manager/pitch_lower", pitch_lower_, -70.0);
@@ -816,11 +817,16 @@ void SurfaceCoverage::surfaceViewpointsGeneration()
     VR.pt_idx_normal_pairs_[unc_id] = normal_vector.normalized();
 
     vector<pcl::PointNormal> tmp_uncovered_vps;
-    // vector<pcl::PointNormal> tmp_uncovered_vps2;
     Vector3d pt_pos(VR.all_cloud_pts_->points[unc_id].x, VR.all_cloud_pts_->points[unc_id].y,
         VR.all_cloud_pts_->points[unc_id].z);
-    // computeUncoveredViewpoints(pt_pos, normal_vector, tmp_uncovered_vps2);
-    computeUncoveredViewpointsUsingSdfGrad(pt_pos, normal_vector, tmp_uncovered_vps);
+
+    if (use_sdf_grad_filter_) { 
+      computeUncoveredViewpointsUsingSdfGrad(pt_pos, normal_vector, tmp_uncovered_vps);
+    }
+    else {
+      computeUncoveredViewpoints(pt_pos, normal_vector, tmp_uncovered_vps);
+    }
+
     all_uncovered_vps[unc_id] = tmp_uncovered_vps;
   }
   ROS_WARN_THROTTLE(

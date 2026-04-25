@@ -227,7 +227,8 @@ private:
   bool vis_flag_ = false;
   bool start_vp_gen_flag_ = true;
   bool global_viewpoint_generation_ = false;
-  bool use_uniqueness_score_;
+  bool use_uniqueness_score_ = false;
+  bool use_sdf_grad_filter_ = false;
   int frozen_surface_min_num_;
   ros::Timer vis_timer_;
 
